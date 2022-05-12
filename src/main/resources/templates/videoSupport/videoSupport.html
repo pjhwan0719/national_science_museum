@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="ko" xmlns:th="http://www.w3.org/1999/xhtml">
+<head>
+    <meta http-equiv="content-type" content="text/html; charset=UTF-8">
+    <title>화상지원</title>
+
+    <!-- 합쳐지고 최소화된 최신 CSS -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.2/css/bootstrap.min.css">
+    <!-- 부가적인 테마 -->
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.2/css/bootstrap-theme.min.css">
+    <!-- 제이쿼리 -->
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.3.1/jquery.min.js"></script>
+    <!-- 합쳐지고 최소화된 최신 자바스크립트 -->
+    <script src="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.2/js/bootstrap.min.js"></script>
+    <!-- Socket -->
+    <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1/dist/sockjs.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/stomp.js/2.3.3/stomp.min.js"></script>
+
+    <style>
+        #body {
+            height: 100vh;
+            background: url(/images/videoSupport/kiosk01.png) no-repeat center;
+        }
+
+        #div_goConnect {
+            position:relative;
+            left: 42.5%;
+            top: 63.5%;
+            width:290px;
+            height:110px;
+            /* border: 1px solid red; */
+            border-radius: 50px;
+            background-color: #7b83d5;
+            text-align: center;
+            line-height: 110px;
+        }
+
+        #iframe_videoView {
+            position:relative;
+            left: 10%;
+            top: 10%;
+            width:80%;
+            height:70%;
+            border-radius: 20px;
+            border: 1px solid #cccccc;
+            display: none;
+        }
+
+        #div_callEnd {
+            display: none;
+            position: relative;
+            top: 13%;
+            left: 50%;
+            width: 80px;
+            height: 80px;
+            background: url(/images/videoSupport/icon_call_close.png) no-repeat center;
+            background-color: red;
+            border-radius: 50px;
+        }
+
+    </style>
+
+</head>
+<body id="body">
+<input type="hidden" id="kiosk_id" th:value="${kiosk_id}"/>
+<div id="div_goConnect" onclick="fn_goVideoSupport()">
+    <font size="10px;" color="#FFFFFF"><b>연결</b></font>
+</div>
+<iframe id="iframe_videoView"></iframe>
+<!--<div id="div_test" style="width:700px; height:600px;"></div>-->
+<div id="div_callEnd" onclick="fn_callEnd();"></div>
+</body>
+<script type="text/javascript">
+
+    // 주의 : webosckt 연결 후 연결 끊기전에 재요청 하면 안됨
+    // 마우스 버튼 이벤트 한번 발생하면 이후 들어오는 이벤트는 모두 block처리할것.
+
+    var client;
+    var isDelay = false;
+    var socketVO = {};
+
+    // Socket 연결 시도
+    function fn_goVideoSupport () {
+        var sock = new SockJS('/ws/connect');
+        client = Stomp.over(sock);
+        client.connect( {}, fn_connecting, fn_connectError);
+    }
+
+    // 서버 연결
+    // 서버 연결 후 구독링크(?) 생성
+    // 응답 대기시간 체크
+    function fn_connecting() {
+        $('#div_goConnect').css('display','none');
+        $('#body').css('background','url(/images/videoSupport/kiosk02.gif) no-repeat center');
+
+        socketVO.status = 1;
+        socketVO.kiosk_id = $('#kiosk_id').val();
+
+        client.send('/server/connect/kiosk', {}, JSON.stringify(socketVO));
+        client.subscribe('/kiosk/' + $('#kiosk_id').val(), function (data) {
+            console.log('data.body : '+data.body);
+            socketVO = JSON.parse(data.body);
+            fn_changeView();
+        });
+
+        isDelay = true;
+        fn_responseDelayCheck(60000).then(() => fn_responseDelay());
+    }
+
+    // 상담사 응답시간 체크
+    function fn_responseDelayCheck(ms) {
+        return new Promise((r) => setTimeout(r, ms));
+    }
+
+    // 상담사 부재중 처리
+    function fn_responseDelay() {
+        if(isDelay) {
+            $('#body').css('background','url(/images/videoSupport/kiosk04.png) no-repeat center');
+
+            socketVO.status = 0;
+            client.send('/server/notConnect/counselor', {}, JSON.stringify(socketVO));
+            setTimeout(fn_pageReload, 3000);
+        }
+    }
+
+    // View 처리
+    var room_id = '';
+    var counselor_id = '';
+    function fn_changeView()
+    {
+        if(socketVO.status === '2') {
+            if(room_id === '') {
+                isDelay = false;
+
+                $('#body').css('background','url(/images/videoSupport/bg_visual.png) no-repeat center');
+                $('#iframe_videoView').css('display','block');
+                $('#iframe_videoView').attr('allow', 'camera *;microphone *');
+                $('#iframe_videoView').attr('src', 'https://avad.iptime.org/'+socketVO.room_id);
+
+                $('#div_callEnd').css('display','block');
+
+                room_id = socketVO.room_id;
+                counselor_id = socketVO.counselor_id;
+            }
+            else {
+                socketVO.room_id = room_id;
+                socketVO.counselor_id = counselor_id;
+                alreadyConnected(socketVO);
+            }
+
+        }
+        else if(socketVO.status === '0') {
+            $('#iframe_videoView').remove();
+            $('#div_callEnd').css('display','none');
+            $('#body').css('background','url(/images/videoSupport/kiosk05.png) no-repeat center');
+            setTimeout(fn_pageReload, 3000);
+        }
+    }
+
+    // 이미 연결되었을때
+    function alreadyConnected(socketVO){
+        client.send('/server/alreadyConnect/counselor', {}, JSON.stringify(socketVO));
+    }
+
+    // 연결 끊기
+    function fn_callEnd() {
+        socketVO.status = 0;
+        client.send('/server/disconnect/kiosk', {}, JSON.stringify(socketVO));
+    }
+
+    // page reload
+    function fn_pageReload() {
+        location.reload();
+    }
+
+    // 연결 Error
+    function fn_connectError() {
+        $('#body').css('background','url(/images/videoSupport/kiosk06.png) no-repeat center');
+        client.send('/server/internal/error', {}, JSON.stringify(socketVO));
+        setTimeout(fn_pageReload, 3000);
+    }
+
+
+</script>
+</html>
